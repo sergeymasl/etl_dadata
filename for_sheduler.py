@@ -1,3 +1,147 @@
+#=============================================класс для запроса==================================================================
+
+# класс запроса с счетчиком
+class dadata_find_id:
+    '''
+    Класс реализующий запросы в api dadata для нахождения информации о компании по ИНН
+    
+    
+    Methods:
+    .find - запрос в дадату
+    '''
+    
+    # инициализация
+    def __init__(self, system_file = 'system.xlsx',
+                count_request_sec_max = 30, count_request_total_max = 10000):
+        '''
+        Params:
+        count_request_sec: int
+            количество запросов в секунду
+        count_request_total: int 
+            максимальное количестов запросов на один токен
+        system_file: str
+            Путь к файлу excel с лимитами по запросам
+        '''
+        import pandas as pd
+        import numpy as np
+        from dadata import Dadata
+        from datetime import datetime
+        
+        self.system_file = system_file
+        # считывание системного файла
+        self.system = pd.read_excel(system_file)
+        # количество токенов
+        self.count_token = range(self.system.shape[0])
+        # номер токена
+        self.num_token = 0
+        # счетчики лимитов в секунду и день
+        self.count_request_sec_max = count_request_sec_max
+        self.count_request_total_max = count_request_total_max
+        # инициализациия в dadate
+        self.token = self.system.loc[self.num_token, 'token']
+        self.dadata = Dadata(self.token)
+        # начальный счетчик для суточного лимита
+        # условие на проверку наличия сегодншних лимитов
+        if self.system[(self.system['date'].apply(lambda x: x.date()) == datetime.now().date()) & (self.system['token'] == self.token)].shape[0] > 0:
+            
+            self.count_request_total = self.system.loc[self.num_token, 'limit']
+        else:
+            self.count_request_total = 0
+        # начальный счетчик в сек
+        self.count_request_sec = 0
+    
+    # запрос в дадату
+    def find(self, inn):
+        '''
+        Запрос в дадату и выгрузка
+        
+        '''
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime
+        import time
+        import json
+        from dadata import Dadata
+        
+        # селектор для зацикливания и смены токенов пока они есть
+        selector = True
+        # запрос и смена токена при привышении лимита
+        
+        
+        while selector == True:
+            # проверки на лимит в день           
+            if self.count_request_total < self.count_request_total_max:
+                # проверка на количество запросов в секунду
+                if self.count_request_sec < self.count_request_sec_max:
+                    self.count_request_sec += 1
+                    self.count_request_total += 1
+                    # ответ
+                    answer =  self.dadata.find_by_id("party", inn)
+                    
+                    # проверка в случае не отработки по инн
+                    if not answer:
+                        answer = 'not found'
+                        
+                    selector = False
+                    
+                elif self.count_request_sec == self.count_request_sec_max:
+                    time.sleep(1)
+                    self.count_request_sec = 1
+                    self.count_request_total += 1
+                    
+                    answer =  self.dadata.find_by_id("party", inn)
+                    
+                    # проверка в случае не отработки по инн
+                    if not answer:
+                        answer = 'not found'
+                    
+                    selector = False
+            else:            
+                # если суточный лимит превышен записываем отработанный лимит в system
+                # сначала вписываем сегодняшнюю дату
+                self.system.loc[self.system['token'] == self.token, 'date'] = datetime.now().date()
+                # вписываем лимит
+                self.system.loc[self.system['token'] == self.token, 'limit'] = self.count_request_total
+                
+                #  меняем токен
+                if self.num_token + 1 in self.count_token:
+                    self.num_token += 1
+                    self.token = self.system.loc[self.num_token, 'token']
+                    self.dadata = Dadata(self.token)
+                    # начальный счетчик для суточного лимита
+                    # условие на проверку наличия сегодншних лимитов для смены токена
+                    if self.system[(self.system['date'] == datetime.now().date()) & (self.system['token'] == self.token)].shape[0] > 0:
+                    
+                        self.count_request_total = self.system.loc[self.num_token, 'limit']
+                    else:
+                        self.count_request_total = 0
+                    # токен сменен
+                # если токенов уже не осталось возвращяем False
+                else:
+
+                    selector = False
+                    answer = False
+        # возврат ответа          
+        return answer
+    
+    def write_to_system(self):
+        '''
+        Вписываем текущие значения в system и выгружаем их
+        '''
+        from datetime import datetime
+        # сначала вписываем сегодняшнюю дату
+        self.system.loc[self.system['token'] == self.token, 'date'] = datetime.now().date()
+        # вписываем лимит
+        self.system.loc[self.system['token'] == self.token, 'limit'] = self.count_request_total
+        
+        # выгружаем
+        self.system.to_excel(self.system_file, index = False)
+
+
+
+#=============================================функция для работы==================================================================
+
+
 def dadata_inn_parce(work_file = 'source.xlsx', column = 'userInn'):
     '''
     Функция по считыванию и запросу в дададу значений о компаниях по ИНН
@@ -15,8 +159,9 @@ def dadata_inn_parce(work_file = 'source.xlsx', column = 'userInn'):
     import telebot
     from datetime import datetime
     from pandas.io.excel import ExcelWriter
-    from bot_info import bot_token, channel_id 
+    from bot_info inport bot_token, channel_id
     
+    bot = telebot.TeleBot(bot_token)
     
     # считывам source_file
     df_source = pd.read_excel(work_file, dtype = 'str')
@@ -29,7 +174,7 @@ def dadata_inn_parce(work_file = 'source.xlsx', column = 'userInn'):
     df_work = df_source.loc[df_source['отработано'] != df_source['отработано']]
     df_work.drop_duplicates(inplace = True)
     # данные для работы считаны
-    # создаем объект для поиска
+    # создаем объет для поиска
     f = dadata_find_id()
     # столбцы для возврата
     list_of_columns = [
@@ -130,4 +275,8 @@ def dadata_inn_parce(work_file = 'source.xlsx', column = 'userInn'):
         {exc_mes}
         {exc_arg}
         ''', parse_mode='HTML')
-    
+        
+#=============================================запуск==================================================================
+
+
+dadata_inn_parce() 
